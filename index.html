@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asado Analytics</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+
+    <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.23.0/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+
+    <style>
+        /* --- PALETA MARINO (OBITER) --- */
+        :root {
+            --bg:           #0A2540;
+            --card:         #112944;
+            --card-2:       #0d2640;
+            --ink:          #E8DCC6;
+            --ink-soft:     rgba(232, 220, 198, 0.65);
+            --ink-faint:    rgba(232, 220, 198, 0.40);
+            --rule:         rgba(232, 220, 198, 0.10);
+            --rule-soft:    rgba(232, 220, 198, 0.06);
+            --hover-bg:     rgba(232, 220, 198, 0.04);
+            --grid:         rgba(232, 220, 198, 0.08);
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--ink);
+            font-family: 'Newsreader', Georgia, serif;
+        }
+
+        /* --- CARD --- */
+        .card {
+            background-color: var(--card);
+            border: 1px solid var(--rule);
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+            transition: border-color 0.2s;
+        }
+        .card:hover { border-color: rgba(232, 220, 198, 0.22); }
+
+        /* --- TIPOGRAFÍA --- */
+        .font-serif  { font-family: 'Instrument Serif', Georgia, serif; }
+        .font-mono   { font-family: 'JetBrains Mono', ui-monospace, monospace !important; }
+
+        /* --- OVERRIDES TAILWIND → PALETA MARINO --- */
+        .text-white  { color: var(--ink) !important; }
+        .text-slate-400 { color: var(--ink-soft) !important; }
+        .text-slate-500 { color: var(--ink-faint) !important; }
+        .text-slate-300 { color: rgba(232, 220, 198, 0.82) !important; }
+        .bg-slate-900   { background-color: var(--bg) !important; }
+        .bg-slate-800   { background-color: var(--card-2) !important; }
+        .border-slate-700 { border-color: var(--rule) !important; }
+        .border-slate-800 { border-color: var(--rule-soft) !important; }
+        .hover\:bg-slate-700\/50:hover { background-color: var(--hover-bg) !important; }
+        .bg-opacity-80  { background-color: rgba(10, 37, 64, 0.85) !important; }
+
+        /* --- GRADIENTE TITULAR --- */
+        .text-gradient {
+            background: linear-gradient(to right, #f97316, #ef4444);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* --- SCROLLBAR --- */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: rgba(232, 220, 198, 0.22); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(232, 220, 198, 0.38); }
+
+        /* --- LOADER --- */
+        .loader {
+            border: 3px solid var(--rule);
+            border-top: 3px solid #f97316;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            animation: spin 0.9s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-presets="react,env">
+        const { useState, useEffect, useRef } = React;
+
+        const SHEET_ID   = '1380R_xznLfEkHT7v_JHTXZuR4KET5Oe3nJg6hcHM4Ko';
+        const SHEET_NAME = 'Registro';
+
+        // Chart.js: defaults globales — JetBrains Mono + paleta pergamino
+        Chart.defaults.font.family = "'JetBrains Mono', ui-monospace, monospace";
+        Chart.defaults.font.size   = 11;
+        Chart.defaults.color       = 'rgba(232, 220, 198, 0.65)';
+
+        async function fetchSheetData() {
+            const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SHEET_NAME)}`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const text = await res.text();
+
+            const jsonStr = text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
+            const gviz = JSON.parse(jsonStr);
+            if (gviz.status === 'error') throw new Error(gviz.errors?.[0]?.message || 'Error en el sheet');
+            if (!gviz.table) throw new Error('No se encontraron datos');
+
+            const cols    = gviz.table.cols;
+            const headers = cols.map(col => (col.label || col.id).trim());
+
+            return gviz.table.rows
+                .filter(row => row && row.c)
+                .map(row => {
+                    const obj = {};
+                    row.c.forEach((cell, i) => {
+                        const type = cols[i].type;
+                        if (!cell || cell.v === null || cell.v === undefined) {
+                            obj[headers[i]] = '';
+                        } else if (type === 'number') {
+                            obj[headers[i]] = cell.v;
+                        } else if (type === 'boolean') {
+                            obj[headers[i]] = cell.v;
+                        } else if (type === 'date' || type === 'datetime') {
+                            obj[headers[i]] = cell.f || '';
+                        } else {
+                            obj[headers[i]] = cell.v !== null ? String(cell.v) : '';
+                        }
+                    });
+                    return obj;
+                });
+        }
+
+        // --- ICONOS ---
+        const IconFire   = () => <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-2.246-3.75-2.246-3.75a3.75 3.75 0 1 1 3.75 3.75c0 .324-.04.64-.114.945a.5.5 0 0 0 .848.375 2.5 2.5 0 0 1 3.824-2.825A2.5 2.5 0 0 1 18.5 13.5a2.5 2.5 0 0 1 1.77 4.27 2.5 2.5 0 0 1-3.6 3.6 2.5 2.5 0 1 1-3.536-3.536"/><circle cx="12" cy="12" r="10"/></svg>;
+        const IconDollar = () => <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>;
+        const IconUsers  = () => <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
+        const IconMeat   = () => <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>;
+
+        // Íconos para header y títulos de charts
+        const S = "http://www.w3.org/2000/svg";
+        const svgProps = { xmlns: S, fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" };
+        const IconFlame    = () => <svg {...svgProps} width="26" height="26" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>;
+        const IconUsersS   = () => <svg {...svgProps} width="14" height="14" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
+        const IconTag      = () => <svg {...svgProps} width="14" height="14" viewBox="0 0 24 24"><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2Z"/><path d="M7 7h.01"/></svg>;
+        const IconMapPin   = () => <svg {...svgProps} width="14" height="14" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>;
+        const IconTrendUp  = () => <svg {...svgProps} width="14" height="14" viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>;
+
+        const StatCard = ({ title, value, subtext, icon, color }) => (
+            <div className="card p-6 flex items-start justify-between">
+                <div>
+                    <p className="text-slate-400 text-xs uppercase tracking-widest"
+                       style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.12em' }}>
+                        {title}
+                    </p>
+                    <h3 className="text-3xl font-bold mt-2 text-white"
+                        style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 500 }}>
+                        {value}
+                    </h3>
+                    {subtext && (
+                        <p className="text-slate-500 text-xs mt-1"
+                           style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                            {subtext}
+                        </p>
+                    )}
+                </div>
+                <div className={`p-3 rounded-lg bg-opacity-20 ${
+                    color === 'orange' ? 'bg-orange-500 text-orange-500' :
+                    color === 'blue'   ? 'bg-blue-500 text-blue-500'     :
+                    color === 'green'  ? 'bg-green-500 text-green-500'   : 'bg-red-500 text-red-500'
+                }`}>
+                    {icon}
+                </div>
+            </div>
+        );
+
+        const ChartContainer = ({ title, icon, canvasId, heightClass = "h-64" }) => (
+            <div className={`card p-6 flex flex-col ${heightClass}`}>
+                <h3 className="text-base font-semibold mb-4 border-b border-slate-700 pb-2"
+                    style={{ fontFamily: "'Instrument Serif', Georgia, serif", color: '#E8DCC6',
+                             letterSpacing: '0.01em', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {icon && <span style={{ opacity: 0.55, display: 'flex', alignItems: 'center', color: '#E8DCC6' }}>{icon}</span>}
+                    {title}
+                </h3>
+                <div className="relative w-full flex-1 min-h-0">
+                    <canvas id={canvasId}></canvas>
+                </div>
+            </div>
+        );
+
+        const AsadoApp = () => {
+            const [metrics, setMetrics] = useState(null);
+            const [error, setError]     = useState(null);
+            const chartRefs = useRef({});
+
+            useEffect(() => {
+                fetchSheetData()
+                    .then(data => processData(data))
+                    .catch(err => { console.error(err); setError(err.message); });
+            }, []);
+
+            const processData = (rawData) => {
+                const validRows = rawData.filter(row => row['Fecha'] && row['Asador']);
+                const friendColumns = [
+                    "Batu", "Agustín", "Luis", "Juanchi", "Krancho", "Martín",
+                    "Eloy", "Fer V", "Chachi", "Nico", "Santi", "Gabo",
+                    "Fer MP", "Charles", "Zaca", "Nacho", "Rama"
+                ];
+
+                const processedAsados = validRows.map(row => {
+                    const asistentes = friendColumns.filter(friend => {
+                        const val = row[friend];
+                        return val === true || val === "TRUE" || val === "VERDADERO";
+                    });
+                    const colCortes = row['Cortes'];
+                    const cortes = colCortes ? colCortes.split(',').map(c => c.trim()).filter(Boolean) : [];
+                    return {
+                        fecha:          row['Fecha'],
+                        sede:           row['Sede'],
+                        asador:         row['Asador'],
+                        kgCarne:        parseFloat(row['Kg Carne (Total)']) || 0,
+                        cortes,
+                        gastoPesos:     parseFloat(row['Gasto Comida ($)']) || 0,
+                        cotizacionBlue: parseFloat(row['Cotización blue']) || 1,
+                        asistentes
+                    };
+                });
+                calculateMetrics(processedAsados, friendColumns);
+            };
+
+            const calculateMetrics = (asados, amigos) => {
+                const totalAsados = asados.length;
+                let totalUSD = 0, totalKg = 0, totalPersonas = 0;
+                const attendanceMap = {};
+                amigos.forEach(a => attendanceMap[a] = 0);
+                const corteStats = {};
+                const sedeStats  = {};
+
+                asados.forEach(asado => {
+                    const n = asado.asistentes.length;
+                    if (n > 0) totalUSD += (asado.gastoPesos / asado.cotizacionBlue) / n;
+                    totalKg    += asado.kgCarne;
+                    totalPersonas += n;
+                    asado.asistentes.forEach(p => { if (attendanceMap[p] !== undefined) attendanceMap[p]++; });
+                    asado.cortes.forEach(c => { if (c) corteStats[c] = (corteStats[c] || 0) + 1; });
+                    if (asado.sede) sedeStats[asado.sede] = (sedeStats[asado.sede] || 0) + 1;
+                });
+
+                setMetrics({
+                    totalAsados,
+                    avgUSD:         totalAsados > 0 ? (totalUSD / totalAsados).toFixed(2) : 0,
+                    totalKg:        totalKg.toFixed(1),
+                    avgKgPerPerson: totalPersonas > 0 ? (totalKg / totalPersonas).toFixed(3) : 0,
+                    attendanceMap,
+                    corteStats,
+                    sedeStats,
+                    ultimaFecha: asados.length > 0 ? asados[asados.length - 1].fecha : null,
+                    asados
+                });
+            };
+
+            useEffect(() => {
+                if (!metrics) return;
+                setTimeout(() => renderCharts(metrics), 100);
+            }, [metrics]);
+
+            const renderCharts = (data) => {
+                const GRID    = 'rgba(232, 220, 198, 0.08)';
+                const TICK    = 'rgba(232, 220, 198, 0.60)';
+                const PERG    = '#E8DCC6';
+
+                // 1. Lealtad (%)
+                const ctx1 = document.getElementById('attendanceChart');
+                if (ctx1) {
+                    if (chartRefs.current.attendance) chartRefs.current.attendance.destroy();
+                    const sorted = Object.entries(data.attendanceMap).sort((a, b) => b[1] - a[1]);
+                    const counts = sorted.map(([, v]) => v);
+                    const vals   = sorted.map(([, v]) => data.totalAsados > 0 ? Math.round((v / data.totalAsados) * 100) : 0);
+
+                    chartRefs.current.attendance = new Chart(ctx1, {
+                        type: 'bar',
+                        data: {
+                            labels: sorted.map(([k]) => k),
+                            datasets: [{
+                                label: '%',
+                                data: vals,
+                                backgroundColor: vals.map(v => v < 50 ? 'rgba(239,68,68,0.35)' : 'rgba(34,197,94,0.30)'),
+                                borderColor:     vals.map(v => v < 50 ? '#ef4444' : '#22c55e'),
+                                borderWidth: 1.2
+                            }]
+                        },
+                        options: {
+                            indexAxis: 'y',
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            layout: { padding: { right: 42 } },
+                            plugins: {
+                                legend: { display: false },
+                                datalabels: {
+                                    display: true,
+                                    anchor: 'end',
+                                    align: 'end',
+                                    formatter: (v) => `${v}%`,
+                                    color: TICK,
+                                    font: { size: 11, weight: '500', family: "'JetBrains Mono', monospace" }
+                                },
+                                tooltip: {
+                                    backgroundColor: 'rgba(10, 37, 64, 0.95)',
+                                    borderColor: 'rgba(232, 220, 198, 0.15)',
+                                    borderWidth: 1,
+                                    titleColor: PERG,
+                                    bodyColor: TICK,
+                                    callbacks: {
+                                        label: (ctx) => `  ${vals[ctx.dataIndex]}%  ·  ${counts[ctx.dataIndex]} de ${data.totalAsados} asados`
+                                    }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    max: 100,
+                                    grid: { color: GRID },
+                                    ticks: { color: TICK, callback: (v) => `${v}%` }
+                                },
+                                y: {
+                                    grid: { display: false },
+                                    ticks: { color: PERG, font: { size: 11 } }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                // 2. Mapa de Cortes
+                const ctx2 = document.getElementById('cortesChart');
+                if (ctx2) {
+                    if (chartRefs.current.cortes) chartRefs.current.cortes.destroy();
+                    chartRefs.current.cortes = new Chart(ctx2, {
+                        type: 'doughnut',
+                        data: {
+                            labels: Object.keys(data.corteStats),
+                            datasets: [{
+                                data: Object.values(data.corteStats),
+                                backgroundColor: ['#f97316','#eab308','#ef4444','#8b5cf6','#3b82f6','#06b6d4','#10b981','#f43f5e','#a855f7'],
+                                borderWidth: 0
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { position: 'right', labels: { color: PERG, boxWidth: 10, padding: 10, font: { size: 10 } } },
+                                datalabels: { display: false },
+                                tooltip: {
+                                    backgroundColor: 'rgba(10, 37, 64, 0.95)',
+                                    borderColor: 'rgba(232, 220, 198, 0.15)',
+                                    borderWidth: 1,
+                                    titleColor: PERG,
+                                    bodyColor: TICK
+                                }
+                            }
+                        }
+                    });
+                }
+
+                // 3. Distribución de Sedes
+                const ctx3 = document.getElementById('sedeChart');
+                if (ctx3) {
+                    if (chartRefs.current.sede) chartRefs.current.sede.destroy();
+                    const sedeEntries = Object.entries(data.sedeStats).sort((a, b) => b[1] - a[1]);
+                    chartRefs.current.sede = new Chart(ctx3, {
+                        type: 'doughnut',
+                        data: {
+                            labels: sedeEntries.map(([k]) => k),
+                            datasets: [{
+                                data: sedeEntries.map(([, v]) => v),
+                                backgroundColor: ['#fb7185','#fb923c','#fbbf24','#34d399','#38bdf8','#c084fc'],
+                                borderWidth: 0
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { position: 'right', labels: { color: PERG, boxWidth: 10, padding: 10, font: { size: 10 } } },
+                                datalabels: { display: false },
+                                tooltip: {
+                                    backgroundColor: 'rgba(10, 37, 64, 0.95)',
+                                    borderColor: 'rgba(232, 220, 198, 0.15)',
+                                    borderWidth: 1,
+                                    titleColor: PERG,
+                                    bodyColor: TICK,
+                                    callbacks: {
+                                        label: (ctx) => `  ${ctx.label}: ${ctx.parsed} asado${ctx.parsed !== 1 ? 's' : ''}`
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                // 4. Evolución del Costo
+                const ctx4 = document.getElementById('evolutionChart');
+                if (ctx4) {
+                    if (chartRefs.current.evolution) chartRefs.current.evolution.destroy();
+                    const costs = data.asados.map(a =>
+                        a.asistentes.length > 0 ? Math.round(a.gastoPesos / a.asistentes.length) : 0
+                    );
+                    chartRefs.current.evolution = new Chart(ctx4, {
+                        type: 'line',
+                        data: {
+                            labels: data.asados.map(a => a.fecha),
+                            datasets: [{
+                                label: 'ARS p/p',
+                                data: costs,
+                                borderColor: 'rgba(232, 220, 198, 0.70)',
+                                backgroundColor: 'rgba(232, 220, 198, 0.06)',
+                                pointBackgroundColor: '#E8DCC6',
+                                pointBorderColor: 'rgba(232, 220, 198, 0.40)',
+                                fill: true,
+                                tension: 0.35,
+                                pointRadius: 4,
+                                pointHoverRadius: 6
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                datalabels: { display: false },
+                                legend: { display: false },
+                                tooltip: {
+                                    backgroundColor: 'rgba(10, 37, 64, 0.95)',
+                                    borderColor: 'rgba(232, 220, 198, 0.15)',
+                                    borderWidth: 1,
+                                    titleColor: PERG,
+                                    bodyColor: TICK,
+                                    callbacks: {
+                                        label: (ctx) => `  ARS ${ctx.parsed.y.toLocaleString('es-AR')} por persona`
+                                    }
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    grid: { color: GRID },
+                                    ticks: { color: TICK, callback: (v) => `$${v.toLocaleString('es-AR')}` }
+                                },
+                                x: {
+                                    grid: { display: false },
+                                    ticks: { color: TICK }
+                                }
+                            }
+                        }
+                    });
+                }
+            };
+
+            if (error) return (
+                <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-4 text-center"
+                     style={{ backgroundColor: 'var(--bg)' }}>
+                    <span style={{ color: '#E8DCC6', opacity: 0.6, display: 'flex', transform: 'scale(1.8)' }}><IconFlame /></span>
+                    <p style={{ color: '#ef4444', fontFamily: "'Instrument Serif', serif", fontSize: '1.25rem' }}>
+                        No se pudo cargar el dashboard
+                    </p>
+                    <p style={{ color: 'var(--ink-soft)', fontFamily: "'JetBrains Mono', monospace", fontSize: '0.8rem',
+                                background: 'var(--card)', padding: '8px 16px', borderRadius: '6px' }}>
+                        {error}
+                    </p>
+                    <p style={{ color: 'var(--ink-faint)', fontSize: '0.75rem' }}>
+                        Verificá que el Google Sheet sea visible para cualquiera con el link
+                    </p>
+                </div>
+            );
+
+            if (!metrics) return (
+                <div className="min-h-screen flex flex-col items-center justify-center gap-4"
+                     style={{ backgroundColor: 'var(--bg)' }}>
+                    <div className="loader"></div>
+                    <p style={{ color: 'var(--ink-soft)', fontFamily: "'JetBrains Mono', monospace", fontSize: '0.8rem' }}>
+                        Consultando la base de datos...
+                    </p>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen pb-10">
+
+                    {/* HEADER */}
+                    <header style={{ backgroundColor: 'rgba(10, 37, 64, 0.88)', borderBottom: '1px solid var(--rule)' }}
+                            className="sticky top-0 z-50 backdrop-blur-md">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+                            <div className="flex items-center gap-3">
+                                <span style={{ color: '#E8DCC6', opacity: 0.75, display: 'flex' }}><IconFlame /></span>
+                                <div>
+                                    <h1 style={{ fontFamily: "'Instrument Serif', Georgia, serif",
+                                                 fontSize: '1.6rem', letterSpacing: '0.01em',
+                                                 color: '#E8DCC6', fontWeight: 400 }}>
+                                        Asado <span className="text-gradient">Analytics</span>
+                                    </h1>
+                                    <p style={{ color: 'var(--ink-faint)', fontSize: '0.72rem',
+                                                fontFamily: "'JetBrains Mono', monospace', letterSpacing: '0.06em" }}>
+                                        La peña de chule
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="hidden sm:block text-right">
+                                {metrics.ultimaFecha && (
+                                    <p style={{ color: 'var(--ink-faint)', fontFamily: "'JetBrains Mono', monospace",
+                                                fontSize: '0.7rem', marginBottom: '2px' }}>
+                                        Último: {metrics.ultimaFecha}
+                                    </p>
+                                )}
+                                <p style={{ color: '#22c55e', fontFamily: "'JetBrains Mono', monospace", fontSize: '0.7rem' }}>
+                                    ● ACTUALIZADO
+                                </p>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+                        {/* KPIs */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <StatCard title="Total Asados"       value={metrics.totalAsados}             icon={<IconFire />}   color="orange" />
+                            <StatCard title="Costo Promedio"     value={`USD ${metrics.avgUSD}`}         subtext="Por persona"              icon={<IconDollar />} color="green" />
+                            <StatCard title="Tonelaje Histórico" value={`${metrics.totalKg} kg`}         subtext="Carne consumida en total" icon={<IconMeat />}   color="red" />
+                            <StatCard title="Índice de Gula"     value={`${metrics.avgKgPerPerson} kg`}  subtext="Carne cruda p/p"          icon={<IconUsers />}  color="blue" />
+                        </div>
+
+                        {/* Lealtad + columna derecha */}
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div className="lg:col-span-2 h-[600px]">
+                                <ChartContainer title="Lealtad (%)" icon={<IconUsersS />} canvasId="attendanceChart" heightClass="h-full" />
+                            </div>
+                            <div className="flex flex-col gap-4 h-[600px]">
+                                <div className="flex-1 min-h-0">
+                                    <ChartContainer title="Mapa de Cortes" icon={<IconTag />} canvasId="cortesChart" heightClass="h-full" />
+                                </div>
+                                <div className="flex-1 min-h-0">
+                                    <ChartContainer title="Distribución de Sedes" icon={<IconMapPin />} canvasId="sedeChart" heightClass="h-full" />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Registro Detallado */}
+                        <div className="card overflow-hidden">
+                            <div className="px-6 py-4 border-b border-slate-700"
+                                 style={{ backgroundColor: 'var(--card-2)' }}>
+                                <h3 style={{ fontFamily: "'Instrument Serif', Georgia, serif",
+                                             color: '#E8DCC6', fontSize: '1.05rem', fontWeight: 400 }}>
+                                    Registro Detallado
+                                </h3>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm text-left" style={{ color: 'var(--ink-soft)' }}>
+                                    <thead style={{ backgroundColor: 'var(--card-2)' }}>
+                                        <tr>
+                                            {['Fecha','Asador','Sede','Cortes','Asistentes'].map((h, i) => (
+                                                <th key={h} className={i === 4 ? 'px-6 py-3 text-right' : 'px-6 py-3'}
+                                                    style={{ fontFamily: "'JetBrains Mono', monospace",
+                                                             fontSize: '0.68rem', letterSpacing: '0.10em',
+                                                             textTransform: 'uppercase', color: 'var(--ink-faint)',
+                                                             borderBottom: '1px solid var(--rule)', fontWeight: 500 }}>
+                                                    {h}
+                                                </th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {metrics.asados.slice().reverse().map((row, idx) => (
+                                            <tr key={idx}
+                                                className="hover:bg-slate-700\/50 transition-colors"
+                                                style={{ borderBottom: '1px solid var(--rule-soft)' }}>
+                                                <td className="px-6 py-4"
+                                                    style={{ fontFamily: "'JetBrains Mono', monospace",
+                                                             fontSize: '0.82rem', color: '#E8DCC6' }}>
+                                                    {row.fecha}
+                                                </td>
+                                                <td className="px-6 py-4 font-semibold"
+                                                    style={{ color: '#f97316', fontFamily: "'Newsreader', Georgia, serif" }}>
+                                                    {row.asador}
+                                                </td>
+                                                <td className="px-6 py-4">{row.sede}</td>
+                                                <td className="px-6 py-4">{row.cortes.join(", ")}</td>
+                                                <td className="px-6 py-4 text-right"
+                                                    style={{ fontFamily: "'JetBrains Mono', monospace",
+                                                             fontWeight: 500, color: '#E8DCC6' }}>
+                                                    {row.asistentes.length}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        {/* Evolución del Costo */}
+                        <div className="w-full h-96">
+                            <ChartContainer title="Evolución del Costo (ARS por Persona)" icon={<IconTrendUp />} canvasId="evolutionChart" heightClass="h-full" />
+                        </div>
+
+                        <footer className="text-center pt-8"
+                                style={{ color: 'var(--ink-faint)', fontFamily: "'JetBrains Mono', monospace",
+                                         fontSize: '0.7rem', letterSpacing: '0.04em' }}>
+                            React & Chart.js · datos en tiempo real desde Google Sheets
+                        </footer>
+                    </main>
+                </div>
+            );
+        };
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<AsadoApp />);
+    </script>
+</body>
+</html>
